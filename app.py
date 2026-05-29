@@ -6,9 +6,10 @@ from utils import format_rnd, format_time
 
 st.set_page_config(page_title="Simulación Aduana - Grupo 7", layout="wide")
 
-st.title("⚓ Simulación de Aduana de Camiones - Grupo 7 (Distribución Propia)")
+st.title("🛻 Simulación de Aduana de Camiones - Grupo 7 (Distribución Propia)")
 st.write("Trabajo Práctico 4 - Cátedra de Simulación (4K2 - 2026)")
 
+# -- PARA BARRA LATERAL --
 st.sidebar.header("⚙️ Parámetros de Simulación")
 semilla_input = st.sidebar.number_input("Semilla del Generador (LCG)", min_value=1, value=42, step=1)
 tiempo_simulacion = st.sidebar.number_input("Tiempo total a simular (X minutos)", min_value=10.0, value=720.0, step=10.0)
@@ -30,51 +31,29 @@ st.sidebar.markdown("---")
 rf_min = st.sidebar.number_input("Mínimo Revisión Física (min)", value=30.0, step=0.5)
 rf_max = st.sidebar.number_input("Máximo Revisión Física (min)", value=60.0, step=0.5)
 
+st.sidebar.markdown("---")
+prob_rf_input = st.sidebar.number_input("Probabilidad Derivación a Revisión Física (%)", min_value=0.0, max_value=100.0, value=15.0, step=1.0)
 
 # =========================================================================
-# --- CONTROL DE ERRORES LÓGICOS Y PARAMÉTRICOS (BLOQUEO ESTRICTO) ---
+# --- CONTROL DE ERRORES LÓGICOS Y PARAMÉTRICOS ---
 # =========================================================================
 
-# 1. Validación de Medias Exponenciales (No pueden ser menores ni iguales a cero)
-if media_gen <= 0:
-    st.sidebar.error("❌ Error: La media de Carga General debe ser un valor mayor a cero.")
-    st.info("⚠️ Corregí los errores en los parámetros de la barra lateral para poder simular.")
+if media_gen <= 0 or media_per <= 0:
+    st.sidebar.error("❌ Error: Las medias exponenciales deben ser mayores a cero.")
     st.stop()
 
-if media_per <= 0:
-    st.sidebar.error("❌ Error: La media de Carga Perecedera debe ser un valor mayor a cero.")
-    st.info("⚠️ Corregí los errores en los parámetros de la barra lateral para poder simular.")
-    st.stop()
-
-# 2. Validación de Límites Uniformes (No negativos)
 if cd_min < 0 or cd_max < 0 or rf_min < 0 or rf_max < 0:
-    st.sidebar.error("❌ Error: Los tiempos de atención uniformes no pueden ser negativos.")
-    st.info("⚠️ Corregí los errores en los parámetros de la barra lateral para poder simular.")
+    st.sidebar.error("❌ Error: Los tiempos uniformes no pueden ser negativos.")
     st.stop()
 
-# 3. Validación de Relación Mínimo / Máximo Uniforme (No mayor, No igual)
-if cd_min >= cd_max:
-    if cd_min == cd_max:
-        st.sidebar.error("❌ Error: El mínimo y el máximo de Control Documental no pueden ser iguales.")
-    else:
-        st.sidebar.error("❌ Error: El mínimo de Control Documental no puede ser mayor que el máximo.")
-    st.info("⚠️ Corregí los errores en los parámetros de la barra lateral para poder simular.")
-    st.stop()
-
-if rf_min >= rf_max:
-    if rf_min == rf_max:
-        st.sidebar.error("❌ Error: El mínimo y el máximo de Revisión Física no pueden ser iguales.")
-    else:
-        st.sidebar.error("❌ Error: El mínimo de Revisión Física no puede ser mayor que el máximo.")
-    st.info("⚠️ Corregí los errores en los parámetros de la barra lateral para poder simular.")
+if cd_min >= cd_max or rf_min >= rf_max:
+    st.sidebar.error("❌ Error: Los límites mínimos no pueden superar o igualar a los máximos.")
     st.stop()
 
 # =========================================================================
 
-
-# Si el programa llega hasta acá, significa que todos los inputs son 100% correctos
 if st.sidebar.button("▶️ Ejecutar Simulación"):
-    engine = SimulationEngine(semilla_input, media_gen, media_per, cd_min, cd_max, rf_min, rf_max)
+    engine = SimulationEngine(semilla_input, media_gen, media_per, cd_min, cd_max, rf_min, rf_max, prob_rf_input / 100.0)
 
     historial_completo = []
     fila_actual = engine.inicializar_sistema()
@@ -108,12 +87,11 @@ if st.sidebar.button("▶️ Ejecutar Simulación"):
         iteracion += 1
 
     if historial_completo[-1]["Reloj"] < tiempo_simulacion:
-        ultima_fila = historial_completo[-1].copy()
-        ultima_fila["Reloj"] = tiempo_simulacion
-        ultima_fila["Evento"] = "Fin_Simulacion"
-        historial_completo.append(ultima_fila)
+        fila_final = engine.evento_fin_simulacion(tiempo_simulacion)
+        historial_completo.append(fila_final)
 
-    df_total = pd.DataFrame(historial_completo)
+    # CORRECCIÓN AQUÍ: .fillna("-") convierte automáticamente cualquier "None" estructural en un guion
+    df_total = pd.DataFrame(historial_completo).fillna("-")
 
     st.subheader("📊 Resultados de la Simulación")
     m1, m2, m3 = st.columns(3)

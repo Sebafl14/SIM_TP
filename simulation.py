@@ -6,7 +6,7 @@ from cargas import Camion
 
 class SimulationEngine:
     def __init__(self, semilla: int, media_gen: float, media_per: float,
-                 cd_min: float, cd_max: float, rf_min: float, rf_max: float):
+                 cd_min: float, cd_max: float, rf_min: float, rf_max: float, prob_rf: float):
 
         self.dist_gen = DistributionGen(seed=semilla)
 
@@ -16,6 +16,7 @@ class SimulationEngine:
         self.cd_max = cd_max
         self.rf_min = rf_min
         self.rf_max = rf_max
+        self.prob_rf = prob_rf  # Probabilidad de revisión física parametrizada desde la UI
 
         self.controles = [ServidorControl(1), ServidorControl(2), ServidorControl(3)]
         self.revision = ServidorRevision()
@@ -57,7 +58,6 @@ class SimulationEngine:
         rnd_cd = {"1": "-", "2": "-", "3": "-"}
         t_cd = {"1": "-", "2": "-", "3": "-"}
 
-        # El RND y el resultado se inicializan en guion por defecto
         rnd_inspeccion = "-"
         pasa_inspeccion = "-"
 
@@ -105,9 +105,8 @@ class SimulationEngine:
 
             puesto.liberar()
 
-            # Solo en este bloque se genera el RND y se decide por "Si" o "No"
             rnd_inspeccion = self.dist_gen.rng.generate_random_number(True, True)
-            if rnd_inspeccion < 0.15:
+            if rnd_inspeccion < self.prob_rf:
                 pasa_inspeccion = "Si"
                 camion_saliente.hora_inicio_espera_rf = reloj_actual
                 if self.revision.estado == "Libre":
@@ -126,8 +125,8 @@ class SimulationEngine:
                 u, t = self.dist_gen.uniform(self.cd_min, self.cd_max)
                 rnd_cd[id_puesto_str], t_cd[id_puesto_str] = u, t
                 puesto.ocupar(proximo_camion, round(reloj_actual + t, 4))
-                # Calculos que luego usare para Espera promedio de cada carga
-                espera = round(reloj_actual - proximo_camion.hora_inicio_espera_cd, 4)# Aqui controlo cuanto fue la espera de cada camion
+
+                espera = round(reloj_actual - proximo_camion.hora_inicio_espera_cd, 4)
                 if proximo_camion.tipo == "General":
                     self.acum_espera_gen += espera
                     self.cant_ingresos_gen += 1
@@ -151,10 +150,29 @@ class SimulationEngine:
         if camiones_en_recinto > self.max_camiones_recinto:
             self.max_camiones_recinto = camiones_en_recinto
 
-        return self._crear_fila_estado(reloj_actual, evento_actual, rnd_llegada_gen, t_llegada_gen, # Da valores de las columnas de la simulacion
+        return self._crear_fila_estado(reloj_actual, evento_actual, rnd_llegada_gen, t_llegada_gen,
                                       rnd_llegada_per, t_llegada_per, rnd_cd=rnd_cd, t_cd=t_cd,
                                       rnd_inspeccion=rnd_inspeccion, pasa_inspeccion=pasa_inspeccion,
                                       rnd_rf=rnd_rf, t_rf=t_rf)
+
+    def evento_fin_simulacion(self, reloj_final: float) -> dict:
+        """ Método especial para procesar las métricas pendientes al instante exacto X """
+        if self.revision.estado == "Ocupado":
+            self.tiempo_acum_utilizacion_rf += (reloj_final - self.ultimo_cambio_rf)
+        self.ultimo_cambio_rf = reloj_final
+
+        # Sumamos las esperas acumuladas parciales de los camiones estancados en las colas
+        for camion in self.colas.cola_general:
+            espera_parcial = round(reloj_final - camion.hora_inicio_espera_cd, 4)
+            self.acum_espera_gen += espera_parcial
+            self.cant_ingresos_gen += 1
+
+        for camion in self.colas.cola_perecedera:
+            espera_parcial = round(reloj_final - camion.hora_inicio_espera_cd, 4)
+            self.acum_espera_per += espera_parcial
+            self.cant_ingresos_per += 1
+
+        return self._crear_fila_estado(reloj_final, "Fin_Simulacion")
 
     def _crear_fila_estado(self, reloj, evento, rnd_lg="-", t_lg="-", rnd_lp="-", t_lp="-",
                             rnd_cd=None, t_cd=None, rnd_inspeccion="-", pasa_inspeccion="-",
@@ -164,7 +182,7 @@ class SimulationEngine:
             rnd_cd = {"1": "-", "2": "-", "3": "-"}
         if t_cd is None:
             t_cd = {"1": "-", "2": "-", "3": "-"}
-        # PROMEDIO DE ESPERA DE CADA CARGA
+
         prom_gen = round(self.acum_espera_gen / self.cant_ingresos_gen, 4) if self.cant_ingresos_gen > 0 else 0.0
         prom_per = round(self.acum_espera_per / self.cant_ingresos_per, 4) if self.cant_ingresos_per > 0 else 0.0
         porcentaje_rf = round((self.tiempo_acum_utilizacion_rf / reloj) * 100, 2) if reloj > 0 else 0.0
@@ -181,25 +199,21 @@ class SimulationEngine:
             "Cola Documental General": len(self.colas.cola_general),
             "Cola Documental Perecedera": len(self.colas.cola_perecedera),
 
-            # Puesto 1
             "Estado Control 1": self.controles[0].estado,
             "RND Fin Control 1": rnd_cd["1"],
             "Tiempo Fin Control 1": t_cd["1"],
             "Fin Control 1": self.controles[0].fin_atencion if self.controles[0].fin_atencion else "-",
 
-            # Puesto 2
             "Estado Control 2": self.controles[1].estado,
             "RND Fin Control 2": rnd_cd["2"],
             "Tiempo Fin Control 2": t_cd["2"],
             "Fin Control 2": self.controles[1].fin_atencion if self.controles[1].fin_atencion else "-",
 
-            # Puesto 3
             "Estado Control 3": self.controles[2].estado,
             "RND Fin Control 3": rnd_cd["3"],
             "Tiempo Fin Control 3": t_cd["3"],
             "Fin Control 3": self.controles[2].fin_atencion if self.controles[2].fin_atencion else "-",
 
-            # Inspección (Corregido el nombre de columna y asignación limpia)
             "RND Inspeccion Profunda": rnd_inspeccion,
             "¿Pasa a revision fisica?": pasa_inspeccion,
 
@@ -219,9 +233,21 @@ class SimulationEngine:
             "Maximo Camiones": self.max_camiones_recinto
         }
 
-        for i in range(1, 8):
-            camion = self.camiones_activos.get(i)
-            fila[f"Camion {i} Estado"] = camion.estado if camion else "-"
-            fila[f"Camion {i} Tipo"] = camion.tipo if camion else "-"
+        # SOLUCIÓN DEFINITIVA: Mapeo dinámico escalable al máximo histórico real
+        camiones_vivos = sorted(self.camiones_activos.values(), key=lambda x: x.id)
+
+        # Iteramos dinámicamente hasta la cantidad máxima de camiones que hayan coexistido en el recinto
+        tope_columnas = self.max_camiones_recinto if self.max_camiones_recinto > 0 else 1
+
+        for i in range(1, tope_columnas + 1):
+            if i <= len(camiones_vivos):
+                c = camiones_vivos[i-1]
+                fila[f"Camion Pos {i} ID"] = c.id
+                fila[f"Camion Pos {i} Tipo"] = c.tipo
+                fila[f"Camion Pos {i} Estado"] = c.estado
+            else:
+                fila[f"Camion Pos {i} ID"] = "-"
+                fila[f"Camion Pos {i} Tipo"] = "-"
+                fila[f"Camion Pos {i} Estado"] = "-"
 
         return fila
