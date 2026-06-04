@@ -61,10 +61,17 @@ class SimulationEngine:
         rnd_inspeccion = "-"
         pasa_inspeccion = "-"
 
+        tiempo_espera_gen_evento = "-"
+        tiempo_espera_per_evento = "-"
+
+        nombre_evento_etiqueta = evento_actual
+
         if evento_actual == Evento.LLEGADA_GENERAL:
             self.contador_camiones += 1
             nuevo_camion = Camion(self.contador_camiones, "General", reloj_actual)
             self.camiones_activos[nuevo_camion.id] = nuevo_camion
+
+            nombre_evento_etiqueta = f"{Evento.LLEGADA_GENERAL}({nuevo_camion.id})"
 
             rnd_llegada_gen, t_llegada_gen = self.dist_gen.exponential(mu=self.media_gen)
             self.prox_llegada_gen = round(reloj_actual + t_llegada_gen, 4)
@@ -76,6 +83,7 @@ class SimulationEngine:
                 rnd_cd[p_id], t_cd[p_id] = u, t
                 puesto_libre.ocupar(nuevo_camion, round(reloj_actual + t, 4))
                 self.cant_ingresos_gen += 1
+                tiempo_espera_gen_evento = 0.0
             else:
                 self.colas.agregar_control(nuevo_camion)
 
@@ -83,6 +91,8 @@ class SimulationEngine:
             self.contador_camiones += 1
             nuevo_camion = Camion(self.contador_camiones, "Perecedera", reloj_actual)
             self.camiones_activos[nuevo_camion.id] = nuevo_camion
+
+            nombre_evento_etiqueta = f"{Evento.LLEGADA_PERECEDERA}({nuevo_camion.id})"
 
             rnd_llegada_per, t_llegada_per = self.dist_gen.exponential(mu=self.media_per)
             self.prox_llegada_per = round(reloj_actual + t_llegada_per, 4)
@@ -94,6 +104,7 @@ class SimulationEngine:
                 rnd_cd[p_id], t_cd[p_id] = u, t
                 puesto_libre.ocupar(nuevo_camion, round(reloj_actual + t, 4))
                 self.cant_ingresos_per += 1
+                tiempo_espera_per_evento = 0.0
             else:
                 self.colas.agregar_control(nuevo_camion)
 
@@ -102,6 +113,8 @@ class SimulationEngine:
             idx = int(id_puesto_str) - 1
             puesto = self.controles[idx]
             camion_saliente = puesto.camion_actual
+
+            nombre_evento_etiqueta = f"{evento_actual}({camion_saliente.id})"
 
             puesto.liberar()
 
@@ -127,15 +140,19 @@ class SimulationEngine:
                 puesto.ocupar(proximo_camion, round(reloj_actual + t, 4))
 
                 espera = round(reloj_actual - proximo_camion.hora_inicio_espera_cd, 4)
+
                 if proximo_camion.tipo == "General":
+                    tiempo_espera_gen_evento = espera
                     self.acum_espera_gen += espera
                     self.cant_ingresos_gen += 1
                 else:
+                    tiempo_espera_per_evento = espera
                     self.acum_espera_per += espera
                     self.cant_ingresos_per += 1
 
         elif evento_actual == Evento.FIN_REVISION:
             camion_saliente = self.revision.camion_actual
+            nombre_evento_etiqueta = f"{Evento.FIN_REVISION}({camion_saliente.id})"
             self.revision.liberar()
             camion_saliente.estado = "FR"
             if camion_saliente.id in self.camiones_activos:
@@ -150,18 +167,17 @@ class SimulationEngine:
         if camiones_en_recinto > self.max_camiones_recinto:
             self.max_camiones_recinto = camiones_en_recinto
 
-        return self._crear_fila_estado(reloj_actual, evento_actual, rnd_llegada_gen, t_llegada_gen,
+        return self._crear_fila_estado(reloj_actual, nombre_evento_etiqueta, rnd_llegada_gen, t_llegada_gen,
                                       rnd_llegada_per, t_llegada_per, rnd_cd=rnd_cd, t_cd=t_cd,
                                       rnd_inspeccion=rnd_inspeccion, pasa_inspeccion=pasa_inspeccion,
-                                      rnd_rf=rnd_rf, t_rf=t_rf)
+                                      rnd_rf=rnd_rf, t_rf=t_rf,
+                                      t_espera_gen=tiempo_espera_gen_evento, t_espera_per=tiempo_espera_per_evento)
 
     def evento_fin_simulacion(self, reloj_final: float) -> dict:
-        """ Método especial para procesar las métricas pendientes al instante exacto X """
         if self.revision.estado == "Ocupado":
             self.tiempo_acum_utilizacion_rf += (reloj_final - self.ultimo_cambio_rf)
         self.ultimo_cambio_rf = reloj_final
 
-        # Sumamos las esperas acumuladas parciales de los camiones estancados en las colas
         for camion in self.colas.cola_general:
             espera_parcial = round(reloj_final - camion.hora_inicio_espera_cd, 4)
             self.acum_espera_gen += espera_parcial
@@ -176,7 +192,7 @@ class SimulationEngine:
 
     def _crear_fila_estado(self, reloj, evento, rnd_lg="-", t_lg="-", rnd_lp="-", t_lp="-",
                             rnd_cd=None, t_cd=None, rnd_inspeccion="-", pasa_inspeccion="-",
-                            rnd_rf="-", t_rf="-") -> dict:
+                            rnd_rf="-", t_rf="-", t_espera_gen="-", t_espera_per="-") -> dict:
 
         if rnd_cd is None:
             rnd_cd = {"1": "-", "2": "-", "3": "-"}
@@ -198,6 +214,9 @@ class SimulationEngine:
             "Proxima Llegada Perecedera": self.prox_llegada_per,
             "Cola Documental General": len(self.colas.cola_general),
             "Cola Documental Perecedera": len(self.colas.cola_perecedera),
+
+            "Tiempo Espera Cola CD General": t_espera_gen,
+            "Tiempo Espera Cola CD Perecedera": t_espera_per,
 
             "Estado Control 1": self.controles[0].estado,
             "RND Fin Control 1": rnd_cd["1"],
@@ -224,8 +243,19 @@ class SimulationEngine:
             "Fin Revision": self.revision.fin_atencion if self.revision.fin_atencion else "-",
 
             "AC Espera Carga General": self.acum_espera_gen,
+
+            # === NUEVA COLUMNA: CONTADOR GENERAL ===
+            "Cant Ingresos CD General": self.cant_ingresos_gen,
+            # ======================================
+
             "Promedio Espera General": prom_gen,
+
             "AC Espera Carga Perecedera": self.acum_espera_per,
+
+            # === NUEVA COLUMNA: CONTADOR PERECEDERA ===
+            "Cant Ingresos CD Perecedera": self.cant_ingresos_per,
+            # ==========================================
+
             "Promedio Espera Perecedera": prom_per,
             "Tiempo Acumulado Revision": self.tiempo_acum_utilizacion_rf,
             "Porcentaje Utilizacion Revision": porcentaje_rf,
@@ -233,21 +263,20 @@ class SimulationEngine:
             "Maximo Camiones": self.max_camiones_recinto
         }
 
-        # SOLUCIÓN DEFINITIVA: Mapeo dinámico escalable al máximo histórico real
         camiones_vivos = sorted(self.camiones_activos.values(), key=lambda x: x.id)
-
-        # Iteramos dinámicamente hasta la cantidad máxima de camiones que hayan coexistido en el recinto
         tope_columnas = self.max_camiones_recinto if self.max_camiones_recinto > 0 else 1
 
         for i in range(1, tope_columnas + 1):
             if i <= len(camiones_vivos):
                 c = camiones_vivos[i-1]
-                fila[f"Camion Pos {i} ID"] = c.id
+                fila[f"Camion Pos {i} ID"] = str(c.id)
                 fila[f"Camion Pos {i} Tipo"] = c.tipo
                 fila[f"Camion Pos {i} Estado"] = c.estado
+                fila[f"Camion Pos {i} Hora Inicio Espera CD"] = c.hora_inicio_espera_cd if c.estado == "EACD" else "-"
             else:
                 fila[f"Camion Pos {i} ID"] = "-"
                 fila[f"Camion Pos {i} Tipo"] = "-"
                 fila[f"Camion Pos {i} Estado"] = "-"
+                fila[f"Camion Pos {i} Hora Inicio Espera CD"] = "-"
 
         return fila

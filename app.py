@@ -6,10 +6,33 @@ from utils import format_rnd, format_time
 
 st.set_page_config(page_title="Simulación Aduana - Grupo 7", layout="wide")
 
-st.title("🛻 Simulación de Aduana de Camiones - Grupo 7 (Distribución Propia)")
+st.markdown("""
+<style>
+/* --- Celdas del dataframe: texto negro --- */
+[data-testid="stDataFrame"] iframe {
+    color-scheme: light;
+}
+[data-testid="stDataFrame"] div[class*="dvn-scroller"] *,
+[data-testid="stDataFrame"] .cell-text,
+[data-testid="stDataFrame"] span {
+    color: #000000 !important;
+}
+
+/* --- Encabezados de columna: fondo naranja, texto negro y en negrita --- */
+[data-testid="stDataFrame"] .ag-header-cell-label,
+[data-testid="stDataFrame"] .ag-header-cell-text,
+[data-testid="stDataFrame"] .col_heading,
+[data-testid="stDataFrame"] th {
+    background-color: #F5A623 !important;
+    color: #000000 !important;
+    font-weight: 700 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+st.title("⚓ Simulación de Aduana de Camiones - Grupo 7 (Distribución Propia)")
 st.write("Trabajo Práctico 4 - Cátedra de Simulación (4K2 - 2026)")
 
-# -- PARA BARRA LATERAL --
 st.sidebar.header("⚙️ Parámetros de Simulación")
 semilla_input = st.sidebar.number_input("Semilla del Generador (LCG)", min_value=1, value=42, step=1)
 tiempo_simulacion = st.sidebar.number_input("Tiempo total a simular (X minutos)", min_value=10.0, value=720.0, step=10.0)
@@ -35,7 +58,7 @@ st.sidebar.markdown("---")
 prob_rf_input = st.sidebar.number_input("Probabilidad Derivación a Revisión Física (%)", min_value=0.0, max_value=100.0, value=15.0, step=1.0)
 
 # =========================================================================
-# --- CONTROL DE ERRORES LÓGICOS Y PARAMÉTRICOS ---
+# --- CONTROL DE ERRORES LÓGICOS Y PARAMÉTRICOS (BLOQUEO ESTRICTO) ---
 # =========================================================================
 
 if media_gen <= 0 or media_per <= 0:
@@ -90,34 +113,53 @@ if st.sidebar.button("▶️ Ejecutar Simulación"):
         fila_final = engine.evento_fin_simulacion(tiempo_simulacion)
         historial_completo.append(fila_final)
 
-    # CORRECCIÓN AQUÍ: .fillna("-") convierte automáticamente cualquier "None" estructural en un guion
-    df_total = pd.DataFrame(historial_completo).fillna("-")
+    # =========================================================================
+    # --- FILTRADO PARA PREVENIR MESSAGE_SIZE_ERROR ---
+    # =========================================================================
+
+    # Capturo la última fila (para las métricas y el cuadro final) de forma aislada
+    ultima_fila_datos = historial_completo[-1].copy()
+
+    # Buscamos el valor máximo de camiones en la lista nativa
+    max_camiones_historico = max(fila["Maximo Camiones"] for fila in historial_completo)
+
+    # Filtramos la lista antes de convertirla a DataFrame de Pandas
+    historial_filtrado_lista = [f for f in historial_completo if f["Reloj"] >= hora_j][:int(iteraciones_i)]
+
+    # Creo DataFrames ligero solo con los fragmentos a mostrar
+    df_filtrado = pd.DataFrame(historial_filtrado_lista).fillna("-")
+    df_ultima = pd.DataFrame([ultima_fila_datos]).fillna("-")
+
+    # libero memoria
+
+    # =========================================================================
 
     st.subheader("📊 Resultados de la Simulación")
     m1, m2, m3 = st.columns(3)
     with m1:
-        st.metric("Espera Promedio Gral (CD)", f"{df_total['Promedio Espera General'].iloc[-1]} min")
-        st.metric("Espera Promedio Perecedera (CD)", f"{df_total['Promedio Espera Perecedera'].iloc[-1]} min")
+        st.metric("Espera Promedio Gral (CD)", f"{ultima_fila_datos['Promedio Espera General']} min")
+        st.metric("Espera Promedio Perecedera (CD)", f"{ultima_fila_datos['Promedio Espera Perecedera']} min")
     with m2:
-        st.metric("Utilización Revisión Física", f"{df_total['Porcentaje Utilizacion Revision'].iloc[-1]} %")
+        st.metric("Utilización Revisión Física", f"{ultima_fila_datos['Porcentaje Utilizacion Revision']} %")
     with m3:
-        st.metric("Máximo de Camiones Simultáneos", f"{int(df_total['Maximo Camiones'].max())}")
+        st.metric("Máximo de Camiones Simultáneos", f"{int(max_camiones_historico)}")
 
     st.subheader(f"📋 Vector de Estados (Muestra desde minuto {hora_j})")
-    df_filtrado = df_total[df_total["Reloj"] >= hora_j].head(iteraciones_i).copy()
 
-    columnas_rnd = [c for c in df_filtrado.columns if "RND" in c]
-    columnas_tiempo = [c for c in df_filtrado.columns if "Reloj" in c or "Fin" in c or "Tiempo" in c or "Proxima" in c]
+    if not df_filtrado.empty:
+        columnas_rnd = [c for c in df_filtrado.columns if "RND" in c]
+        columnas_tiempo = [c for c in df_filtrado.columns if "Reloj" in c or "Fin" in c or "Tiempo" in c or "Proxima" in c]
 
-    for col in columnas_rnd:
-        df_filtrado[col] = df_filtrado[col].apply(format_rnd)
-    for col in columnas_tiempo:
-        df_filtrado[col] = df_filtrado[col].apply(format_time)
+        for col in columnas_rnd:
+            df_filtrado[col] = df_filtrado[col].apply(format_rnd)
+        for col in columnas_tiempo:
+            df_filtrado[col] = df_filtrado[col].apply(format_time)
 
-    st.dataframe(df_filtrado, use_container_width=True)
+        st.dataframe(df_filtrado, use_container_width=True)
+    else:
+        st.warning("⚠️ No se encontraron iteraciones para mostrar en la ventana de tiempo seleccionada.")
 
     st.subheader("🏁 Última Fila del Vector de Estado (Instante X)")
-    df_ultima = df_total.tail(1).copy()
     columnas_objetos = [c for c in df_ultima.columns if "Camion" in c]
     df_ultima_limpia = df_ultima.drop(columns=columnas_objetos, errors='ignore')
     st.dataframe(df_ultima_limpia, use_container_width=True)
